@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, font as tkfont
+from tkinter import ttk
 import threading
 import queue
 import time
@@ -7,43 +7,19 @@ import math
 from datetime import datetime
 from collections import deque
 from dataclasses import dataclass, field
-from typing import List, Dict, Callable, Tuple, Optional
+from typing import List, Dict
 import random
 
 # BAGIAN 1: DEFINISI STRUKTUR DATA DAN KOMPONEN DASAR
 # Palet warna
 COLORS = {
-    'bg_dark':      '#ffffff',   # putih
-    'bg_panel':     '#f8f9fa',   # abu-abu sangat ringan
-    'bg_card':      '#ffffff',   # putih
-    'bg_input':     '#f0f0f0',   # abu-abu ringan
-    'border':       '#d0d0d0',   # abu-abu medium
-    'text_primary': '#1a1a1a',   # hitam
-    'text_secondary':'#555555',  # abu-abu gelap
-    'text_muted':   '#888888',   # abu-abu medium
-    'accent_rr':    '#0052cc',   # biru tua - Request-Response
-    'accent_ps':    '#28a745',   # hijau tua - Pub-Sub
-    'accent_mp':    '#7030a0',   # ungu tua - Message Passing
-    'accent_rpc':   '#d9480f',   # oranye tua - RPC
-    'accent_gold':  '#b8860b',   # emas tua
-    'success':      '#28a745',
-    'warning':      '#ff9800',
+    'bg_dark':      '#ffffff',   'bg_panel':     '#f8f9fa',   'bg_card':      '#ffffff',
+    'bg_input':     '#f0f0f0',   'border':       '#d0d0d0',   'text_primary': '#1a1a1a',
+    'text_secondary':'#555555',  'text_muted':   '#888888',   'accent_rr':    '#0052cc',
+    'accent_ps':    '#28a745',   'success':      '#28a745',   'warning':      '#ff9800',
     'error':        '#d32f2f',
-    'node_idle':    '#f5f5f5',   # abu-abu ringan
-    'node_active':  '#0052cc',   # biru aktif
-    'node_process': '#2196f3',   # biru process
-    'arrow_color':  '#0052cc',
 }
-
-MODEL_COLORS = {
-    'rr':  COLORS['accent_rr'],
-    'ps':  COLORS['accent_ps'],
-}
-
-MODEL_TAGS = {
-    'rr':  'rr',
-    'ps':  'ps',
-}
+MODEL_COLORS = {'rr': '#0052cc', 'ps': '#28a745'}
 
 @dataclass
 class Message:
@@ -89,14 +65,9 @@ class CommunicationMetric:
 
     def reset(self):
         """Reset semua metrik"""
-        self.total_messages = 0
-        self.total_time = 0.0
-        self.throughput = 0.0
-        self.avg_latency = 0.0
+        self.total_messages = self.total_time = self.throughput = self.avg_latency = 0
         self.min_latency = float('inf')
-        self.max_latency = 0.0
-        self.success_count = 0
-        self.error_count = 0
+        self.max_latency = self.success_count = self.error_count = 0
         self.message_delivery_time = []
         self.start_time = time.time()
 
@@ -133,125 +104,69 @@ class Node:
 
 
 # BAGIAN 2: IMPLEMENTASI MODEL KOMUNIKASI
-class RequestResponseModel:
-    """
-    Model Request-Response (Sinkron)
-    - Pengirim mengirim request dan MENUNGGU respons
-    - Komunikasi satu-ke-satu, blocking
-    
-    CONTOH DUNIA NYATA:
-    1. Smartphone + AC Remote: User tekan tombol → request → AC on/off → respons
-    2. ATM + Bank Server: Withdrawal request → wait approval → money dispensed
-    3. Browser + Web Server: HTTP GET request → wait → HTML response
-    """
-    def __init__(self, name="Request-Response"):
+class CommunicationModel:
+    """Base class untuk model komunikasi"""
+    def __init__(self, name="Model"):
         self.name = name
         self.nodes: Dict[str, Node] = {}
         self.metrics = CommunicationMetric()
         self.lock = threading.Lock()
-        self.event_callback = None  # Callback untuk animasi UI
-
+        self.event_callback = None
+    
     def add_node(self, node: Node):
         self.nodes[node.node_id] = node
 
+class RequestResponseModel(CommunicationModel):
+    """Model Request-Response (Sinkron) - Pengirim menunggu respons"""
     def send_request(self, sender_id: str, receiver_id: str, content: str) -> str:
-        """Pengirim mengirim request dan menunggu respons (blocking)"""
         if receiver_id not in self.nodes:
             return "ERROR: Receiver tidak ditemukan"
-
         msg_id = self.metrics.total_messages + 1
-        message = Message(
-            sender_id=sender_id,
-            receiver_id=receiver_id,
-            content=content,
-            timestamp=time.time(),
-            message_id=msg_id
-        )
-
-        if self.event_callback:
-            self.event_callback('send', sender_id, receiver_id, content)
-
+        message = Message(sender_id=sender_id, receiver_id=receiver_id, content=content,
+                         timestamp=time.time(), message_id=msg_id)
+        self.event_callback and self.event_callback('send', sender_id, receiver_id, content)
         receiver = self.nodes[receiver_id]
         receiver.receive_message(message, time.time())
         response = receiver.process_message(message)
-
-        if self.event_callback:
-            self.event_callback('response', receiver_id, sender_id, response)
-
-        delivery_time = (time.time() - message.timestamp) * 1000
+        self.event_callback and self.event_callback('response', receiver_id, sender_id, response)
         with self.lock:
-            self.metrics.update(delivery_time, success=True)
-
+            self.metrics.update((time.time() - message.timestamp) * 1000, success=True)
         return response
 
-
-class PublishSubscribeModel:
-    """
-    Model Publish-Subscribe (Asinkron)
-    - Publisher tidak perlu mengetahui Subscribers
-    - Decoupled, event-driven, topic-based routing
-    
-    CONTOH DUNIA NYATA:
-    1. Smartphone Notifications: App publish "news_update" → subscribers notified
-    2. Instagram Feed: User posts photo → followers subscribed to "user_posts" get notified
-    3. Smart Home: Sensor publish "temperature_high" → AC, fan subscribe & react
-    """
+class PublishSubscribeModel(CommunicationModel):
+    """Model Publish-Subscribe (Asinkron) - Publisher tidak tahu subscribers"""
     def __init__(self, name="Publish-Subscribe"):
-        self.name = name
-        self.nodes: Dict[str, Node] = {}
+        super().__init__(name)
         self.topics: Dict[str, List[str]] = {}
         self.message_queue = queue.Queue()
-        self.metrics = CommunicationMetric()
-        self.lock = threading.Lock()
         self.running = True
-        self.event_callback = None
-        self.processor_thread = threading.Thread(target=self._message_processor, daemon=True)
-        self.processor_thread.start()
-
-    def add_node(self, node: Node):
-        self.nodes[node.node_id] = node
+        threading.Thread(target=self._message_processor, daemon=True).start()
 
     def subscribe(self, node_id: str, topic: str):
-        """Node berlangganan topic tertentu"""
         if topic not in self.topics:
             self.topics[topic] = []
         if node_id not in self.topics[topic]:
             self.topics[topic].append(node_id)
 
     def publish(self, publisher_id: str, topic: str, content: str):
-        """Publisher menerbitkan pesan ke topic (non-blocking)"""
-        msg_id = self.metrics.total_messages + 1
-        message = Message(
-            sender_id=publisher_id,
-            receiver_id=topic,
-            content=content,
-            timestamp=time.time(),
-            message_id=msg_id
-        )
-        if self.event_callback:
-            self.event_callback('publish', publisher_id, topic, content)
+        message = Message(sender_id=publisher_id, receiver_id=topic, content=content,
+                         timestamp=time.time(), message_id=self.metrics.total_messages + 1)
+        self.event_callback and self.event_callback('publish', publisher_id, topic, content)
         self.message_queue.put((topic, message))
 
     def _message_processor(self):
-        """Thread background: distribusikan pesan ke subscribers"""
         while self.running:
             try:
                 topic, message = self.message_queue.get(timeout=0.5)
-                current_time = time.time()
-
                 if topic in self.topics:
                     for subscriber_id in self.topics[topic]:
                         if subscriber_id in self.nodes:
                             subscriber = self.nodes[subscriber_id]
-                            subscriber.receive_message(message, current_time)
-                            if self.event_callback:
-                                self.event_callback('deliver', message.sender_id, subscriber_id, message.content)
+                            subscriber.receive_message(message, time.time())
+                            self.event_callback and self.event_callback('deliver', message.sender_id, subscriber_id, message.content)
                             subscriber.process_message(message)
-
-                delivery_time = (time.time() - message.timestamp) * 1000
                 with self.lock:
-                    self.metrics.update(delivery_time, success=True)
-
+                    self.metrics.update((time.time() - message.timestamp) * 1000, success=True)
                 self.message_queue.task_done()
             except queue.Empty:
                 continue
@@ -283,20 +198,10 @@ class NetworkDiagramCanvas(tk.Canvas):
     def _draw_static(self):
         """Gambar latar belakang dan semua node"""
         self.delete("all")
-        w = int(self.cget('width'))
-        h = int(self.cget('height'))
-
-        # Background gradient effect (titik-titik kecil)
+        w, h = int(self.cget('width')), int(self.cget('height'))
         for _ in range(80):
-            x = random.randint(0, w)
-            y = random.randint(0, h)
-            r = random.randint(1, 2)
-            alpha_hex = random.choice(['e0', 'e5', 'ea'])
-            self.create_oval(x-r, y-r, x+r, y+r,
-                             fill=f"#{alpha_hex}{alpha_hex}{alpha_hex}",
-                             outline='')
-
-        # Gambar semua node
+            x, y, r = random.randint(0, w), random.randint(0, h), random.randint(1, 2)
+            self.create_oval(x-r, y-r, x+r, y+r, fill=f"#{random.choice(['e0', 'e5', 'ea'])}{random.choice(['e0', 'e5', 'ea'])}{random.choice(['e0', 'e5', 'ea'])}", outline='')
         for node_id, (x, y) in self.node_positions.items():
             self._draw_node(node_id, x, y)
 
@@ -304,27 +209,13 @@ class NetworkDiagramCanvas(tk.Canvas):
         """Gambar satu node sebagai lingkaran berlabel"""
         r = self.NODE_RADIUS
         fill = self.accent if active else COLORS['bg_card']
-        outline = self.accent
         lw = 2 if not active else 3
-
-        # Glow effect saat aktif
         if active:
-            self.create_oval(x-r-6, y-r-6, x+r+6, y+r+6,
-                             fill='', outline=self.accent, width=2,
-                             tags=(f"glow_{node_id}",))
-
-        oval_id = self.create_oval(x-r, y-r, x+r, y+r,
-                                   fill=fill, outline=outline, width=lw,
-                                   tags=(f"node_{node_id}",))
-
-        # Label singkat (2 baris)
+            self.create_oval(x-r-6, y-r-6, x+r+6, y+r+6, fill='', outline=self.accent, width=2, tags=(f"glow_{node_id}",))
+        self.create_oval(x-r, y-r, x+r, y+r, fill=fill, outline=self.accent, width=lw, tags=(f"node_{node_id}",))
         parts = node_id.split('-')
         label = parts[0] if len(parts) == 1 else f"{parts[0]}\n{'-'.join(parts[1:])}"
-        self.create_text(x, y, text=label,
-                         fill=COLORS['text_primary'],
-                         font=("Consolas", 7, "bold"),
-                         tags=(f"label_{node_id}",))
-        return oval_id
+        self.create_text(x, y, text=label, fill=COLORS['text_primary'], font=("Consolas", 7, "bold"), tags=(f"label_{node_id}",))
 
     def _get_edge_point(self, x1, y1, x2, y2):
         """Hitung titik di tepi lingkaran node (bukan di tengah)"""
@@ -334,96 +225,57 @@ class NetworkDiagramCanvas(tk.Canvas):
         dist = math.hypot(dx, dy) or 1
         return x1 + dx/dist*r, y1 + dy/dist*r
 
-    # Animasi pengiriman pesan
-    def animate_message(self, sender_id: str, receiver_id: str,
-                        label: str = "msg", color: str = None):
+    def animate_message(self, sender_id: str, receiver_id: str, label: str = "msg", color: str = None):
         """Animasikan partikel pesan bergerak dari sender ke receiver"""
         try:
             if sender_id not in self.node_positions or receiver_id not in self.node_positions:
                 return
-
-            if color is None:
-                color = self.accent
-
+            color = color or self.accent
             sx, sy = self.node_positions[sender_id]
             rx, ry = self.node_positions[receiver_id]
-
-            # Titik mulai dan akhir di tepi node
             x1, y1 = self._get_edge_point(sx, sy, rx, ry)
             x2, y2 = self._get_edge_point(rx, ry, sx, sy)
-
-            # Gambar garis tipis sebagai jalur
-            line_id = self.create_line(x1, y1, x2, y2,
-                                       fill=color, width=1,
-                                       dash=(4, 4), tags=('anim_line',))
-
-            # Partikel pesan (lingkaran kecil)
+            
+            line_id = self.create_line(x1, y1, x2, y2, fill=color, width=1, dash=(4, 4), tags=('anim_line',))
             pr = 6
-            dot_id = self.create_oval(x1-pr, y1-pr, x1+pr, y1+pr,
-                                      fill=color, outline='white', width=1,
-                                      tags=('anim_dot',))
-            txt_id = self.create_text(x1, y1-14, text=label[:10],
-                                      fill=color, font=("Consolas", 6),
-                                      tags=('anim_txt',))
-
-            # Flash node pengirim
+            dot_id = self.create_oval(x1-pr, y1-pr, x1+pr, y1+pr, fill=color, outline='white', width=1, tags=('anim_dot',))
+            txt_id = self.create_text(x1, y1-14, text=label[:10], fill=color, font=("Consolas", 6), tags=('anim_txt',))
+            
             self._flash_node(sender_id, color)
-
             steps = self.ANIM_STEPS
-            def step(frame_num):
+            def step(f):
+                if f > steps:
+                    for oid in (dot_id, txt_id, line_id):
+                        try: self.delete(oid)
+                        except: pass
+                    self._flash_node(receiver_id, color)
+                    return
+                t = f / steps
+                cx, cy = x1 + (x2-x1)*t, y1 + (y2-y1)*t
                 try:
-                    if frame_num > steps:
-                        try:
-                            self.delete(dot_id)
-                            self.delete(txt_id)
-                            self.delete(line_id)
-                        except tk.TclError:  # Canvas item already deleted
-                            pass
-                        self._flash_node(receiver_id, color)
-                        return
-                    t = frame_num / steps
-                    cx = x1 + (x2-x1)*t
-                    cy = y1 + (y2-y1)*t
-                    try:
-                        self.coords(dot_id, cx-pr, cy-pr, cx+pr, cy+pr)
-                        self.coords(txt_id, cx, cy-14)
-                    except tk.TclError:  # Canvas item deleted, stop animation
-                        return
-                    self.after(self.ANIM_DELAY, lambda: step(frame_num+1))
-                except Exception:
-                    pass  # Silent fail if canvas is destroyed
-
+                    self.coords(dot_id, cx-pr, cy-pr, cx+pr, cy+pr)
+                    self.coords(txt_id, cx, cy-14)
+                    self.after(self.ANIM_DELAY, lambda: step(f+1))
+                except: pass
             step(0)
-        except Exception:
-            pass  # Silent fail if canvas operations fail
+        except: pass
 
     def _flash_node(self, node_id: str, color: str):
-        """Kedipkan node sesaat (efek aktif)"""
+        """Kedipkan node sesaat"""
         try:
             items = self.find_withtag(f"node_{node_id}")
-            if not items:
-                return
-            oid = items[0]
-            try:
-                self.itemconfig(oid, fill=color + 'aa')
-                self.after(300, lambda: self._safe_itemconfig(oid, fill=COLORS['bg_card']))
-            except tk.TclError:
-                pass
-        except Exception:
-            pass
+            if items:
+                self.itemconfig(items[0], fill=color + 'aa')
+                self.after(300, lambda: self._safe_itemconfig(items[0], fill=COLORS['bg_card']))
+        except: pass
 
-    def _safe_itemconfig(self, oid, **kwargs):
-        """Safe itemconfig dengan error handling"""
+    def _safe_itemconfig(self, oid, **kw):
+        """Safe itemconfig"""
         try:
-            if kwargs.get('fill'):
-                # Ensure valid 6-digit hex color
-                fill_color = kwargs['fill']
-                if fill_color and fill_color.startswith('#') and len(fill_color) > 7:
-                    fill_color = fill_color[:7]  # Strip alpha channel
-                kwargs['fill'] = fill_color
-            self.itemconfig(oid, **kwargs)
-        except tk.TclError:
-            pass
+            if 'fill' in kw and kw['fill'] and kw['fill'].startswith('#'):
+                kw['fill'] = kw['fill'][:7]
+            self.itemconfig(oid, **kw)
+        except: pass
 
     def highlight_node(self, node_id: str, active: bool = True):
         """Ubah warna border node"""
@@ -433,29 +285,10 @@ class NetworkDiagramCanvas(tk.Canvas):
             self.itemconfig(items[0], width=lw)
 
 
-# Konfigurasi posisi node untuk setiap diagram model
+# Konfigurasi posisi node untuk diagram
 DIAGRAM_LAYOUTS = {
-    'rr': {
-        'ATM-Terminal-1': (90, 100),
-        'ATM-Terminal-2': (90, 220),
-        'Bank-Server':    (330, 160),
-    },
-    'ps': {
-        'Temperature-Sensor': (90, 160),
-        'AC-Unit':            (340, 70),
-        'Fan':                (340, 160),
-        'Mobile-App':         (340, 250),
-    },
-    'mp': {
-        'Node-A': (90, 80),
-        'Node-B': (310, 80),
-        'Node-C': (200, 240),
-    },
-    'rpc': {
-        'Client-RPC-1': (90, 100),
-        'Client-RPC-2': (90, 220),
-        'Server-RPC':   (330, 160),
-    },
+    'rr': {'ATM-Terminal-1': (90, 100), 'ATM-Terminal-2': (90, 220), 'Bank-Server': (330, 160)},
+    'ps': {'Temperature-Sensor': (90, 160), 'AC-Unit': (340, 70), 'Fan': (340, 160), 'Mobile-App': (340, 250)},
 }
 
 # BAGIAN 4: GRAFIK BATANG (Bar Chart Canvas)
@@ -475,48 +308,21 @@ class BarChartCanvas(tk.Canvas):
 
     def _redraw(self):
         self.delete("all")
-        w = int(self.cget('width'))
-        h = int(self.cget('height'))
-
-        self.create_text(w//2, 12, text=self.title,
-                         fill=COLORS['text_secondary'],
-                         font=("Consolas", 8, "bold"))
-
+        w, h = int(self.cget('width')), int(self.cget('height'))
+        self.create_text(w//2, 12, text=self.title, fill=COLORS['text_secondary'], font=("Consolas", 8, "bold"))
         if not self.data:
             return
-
-        max_val = max(self.data.values()) or 1
-        bar_area_top = 25
-        bar_area_bot = h - 20
-        bar_h = bar_area_bot - bar_area_top
-        n = len(self.data)
-        pad = 8
-        bar_w = (w - pad*(n+1)) // n
-
+        max_val, n, pad = max(self.data.values()) or 1, len(self.data), 8
+        bar_w, bar_h = (w - pad*(n+1)) // n, h - 45
         for i, (key, val) in enumerate(self.data.items()):
-            bx = pad + i*(bar_w + pad)
-            fill_h = int((val / max_val) * bar_h)
-            by_top = bar_area_bot - fill_h
-
-            color = MODEL_COLORS.get(key, '#0052cc')
-            # Bar shadow
-            self.create_rectangle(bx+2, by_top+2, bx+bar_w+2, bar_area_bot+2,
-                                  fill='#e8e8e8', outline='')
-            # Bar fill
-            self.create_rectangle(bx, by_top, bx+bar_w, bar_area_bot,
-                                  fill=color, outline=color, width=1)
-
-            # Label nilai
-            label_val = f"{val:.1f}" if val < 100 else f"{val:.0f}"
-            self.create_text(bx + bar_w//2, by_top - 5,
-                             text=label_val,
-                             fill=color, font=("Consolas", 7))
-            # Label model
-            short = {'rr':'RR','ps':'PS','mp':'MP','rpc':'RPC'}.get(key, key)
-            self.create_text(bx + bar_w//2, bar_area_bot + 10,
-                             text=short,
-                             fill=COLORS['text_secondary'],
-                             font=("Consolas", 7))
+            bx, fill_h = pad + i*(bar_w + pad), int((val / max_val) * bar_h)
+            by_top, color = h - 20 - fill_h, MODEL_COLORS.get(key, '#0052cc')
+            self.create_rectangle(bx+2, by_top+2, bx+bar_w+2, h-18, fill='#e8e8e8', outline='')
+            self.create_rectangle(bx, by_top, bx+bar_w, h-20, fill=color, outline=color, width=1)
+            lbl = f"{val:.1f}" if val < 100 else f"{val:.0f}"
+            self.create_text(bx + bar_w//2, by_top - 5, text=lbl, fill=color, font=("Consolas", 7))
+            self.create_text(bx + bar_w//2, h-8, text={'rr':'RR','ps':'PS'}.get(key, key), 
+                           fill=COLORS['text_secondary'], font=("Consolas", 7))
 
 # BAGIAN 5: INTERFACE GRAFIS UTAMA
 class DistributedSystemSimulatorGUI:
@@ -529,138 +335,105 @@ class DistributedSystemSimulatorGUI:
 
         self.log_messages = []
         self.is_running = False
-        self.running = True  # Flag untuk thread safety
+        self.running = True
         self.models: Dict = {}
         self.diagrams: Dict[str, NetworkDiagramCanvas] = {}
 
         self._setup_styles()
         self._initialize_models()
         self._build_ui()
-
-        # Setup close handler
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
-
-        # Periodik update metrik
         self._start_metric_updater()
+
+    def _mk_label(self, parent, text=None, **kw) -> tk.Label:
+        """Helper: buat label dengan default styling"""
+        if text is not None:
+            kw['text'] = text
+        lbl = tk.Label(parent, bg=kw.pop('bg', COLORS['bg_panel']), 
+                       fg=kw.pop('fg', COLORS['text_secondary']), **kw)
+        return lbl
+    
+    def _mk_btn(self, parent, text, cmd, style='normal', **kw) -> tk.Button:
+        """Helper: buat button dengan styling"""
+        if style == 'run':
+            return tk.Button(parent, text=text, command=cmd, bg=COLORS['accent_rr'], fg='white',
+                           font=("Helvetica", 9, "bold"), relief=tk.FLAT, bd=0, padx=10, pady=7,
+                           activebackground='#79c0ff', cursor='hand2', **kw)
+        return tk.Button(parent, text=text, command=cmd, bg=COLORS['bg_input'], 
+                        fg=COLORS['text_secondary'], font=("Helvetica", 8), relief=tk.FLAT, 
+                        bd=0, padx=10, pady=6, activebackground=COLORS['bg_card'], cursor='hand2', **kw)
+
+    def _mk_section(self, parent, text):
+        """Helper: buat section header"""
+        self._mk_label(parent, text, bg=COLORS['bg_panel'], fg=COLORS['accent_rr'], 
+                      font=("Helvetica", 8, "bold")).pack(anchor=tk.W, padx=12, pady=(12, 4))
+        tk.Frame(parent, bg=COLORS['border'], height=1).pack(fill=tk.X, padx=12)
 
     # Inisialisasi
     def _setup_styles(self):
         """Konfigurasi ttk styles untuk dark theme"""
         style = ttk.Style()
         style.theme_use('clam')
+        
+        # Helper untuk style label
+        label_styles = {
+            'Dark.TLabel': (COLORS['bg_dark'], COLORS['text_primary'], ("Consolas", 9)),
+            'Title.TLabel': (COLORS['bg_dark'], COLORS['text_primary'], ("Consolas", 13, "bold")),
+            'Sub.TLabel': (COLORS['bg_panel'], COLORS['text_secondary'], ("Consolas", 8)),
+            'Metric.TLabel': (COLORS['bg_card'], COLORS['text_primary'], ("Consolas", 10, "bold")),
+            'MetricVal.TLabel': (COLORS['bg_card'], COLORS['accent_rr'], ("Consolas", 11, "bold")),
+        }
+        for lbl_style, (bg, fg, font) in label_styles.items():
+            style.configure(lbl_style, background=bg, foreground=fg, font=font)
 
-        style.configure('Dark.TFrame', background=COLORS['bg_dark'])
-        style.configure('Panel.TFrame', background=COLORS['bg_panel'])
-        style.configure('Card.TFrame', background=COLORS['bg_card'])
+        # Frames
+        for name, bg in [('Dark.TFrame', COLORS['bg_dark']), ('Panel.TFrame', COLORS['bg_panel']), ('Card.TFrame', COLORS['bg_card'])]:
+            style.configure(name, background=bg)
 
-        style.configure('Dark.TLabel',
-                        background=COLORS['bg_dark'],
-                        foreground=COLORS['text_primary'],
-                        font=("Consolas", 9))
-        style.configure('Title.TLabel',
-                        background=COLORS['bg_dark'],
-                        foreground=COLORS['text_primary'],
-                        font=("Consolas", 13, "bold"))
-        style.configure('Sub.TLabel',
-                        background=COLORS['bg_panel'],
-                        foreground=COLORS['text_secondary'],
-                        font=("Consolas", 8))
-        style.configure('Metric.TLabel',
-                        background=COLORS['bg_card'],
-                        foreground=COLORS['text_primary'],
-                        font=("Consolas", 10, "bold"))
-        style.configure('MetricVal.TLabel',
-                        background=COLORS['bg_card'],
-                        foreground=COLORS['accent_rr'],
-                        font=("Consolas", 11, "bold"))
+        # Buttons & Controls
+        style.configure('Run.TButton', background=COLORS['accent_rr'], foreground='white', font=("Consolas", 9, "bold"), borderwidth=0)
+        style.map('Run.TButton', background=[('active', '#79c0ff'), ('disabled', '#30363d')], foreground=[('disabled', COLORS['text_muted'])])
+        style.configure('Clear.TButton', background=COLORS['bg_input'], foreground=COLORS['text_secondary'], font=("Consolas", 9), borderwidth=0)
+        style.configure('Dark.TRadiobutton', background=COLORS['bg_panel'], foreground=COLORS['text_primary'], font=("Consolas", 9), indicatorcolor=COLORS['accent_rr'])
+        style.map('Dark.TRadiobutton', background=[('active', COLORS['bg_card'])])
+        style.configure('Dark.TScale', background=COLORS['bg_panel'], troughcolor=COLORS['bg_input'], sliderthickness=14)
+        style.configure('Dark.TSpinbox', background=COLORS['bg_input'], foreground=COLORS['text_primary'], font=("Consolas", 9))
 
-        style.configure('Run.TButton',
-                        background=COLORS['accent_rr'],
-                        foreground='white',
-                        font=("Consolas", 9, "bold"),
-                        borderwidth=0)
-        style.map('Run.TButton',
-                  background=[('active', '#79c0ff'), ('disabled', '#30363d')],
-                  foreground=[('disabled', COLORS['text_muted'])])
+        # Notebook & Treeview
+        style.configure('Dark.TNotebook', background=COLORS['bg_dark'], borderwidth=0)
+        style.configure('Dark.TNotebook.Tab', background=COLORS['bg_panel'], foreground=COLORS['text_secondary'], font=("Consolas", 9), padding=[10, 5])
+        style.map('Dark.TNotebook.Tab', background=[('selected', COLORS['bg_card'])], foreground=[('selected', COLORS['text_primary'])])
+        style.configure('Dark.Treeview', background=COLORS['bg_card'], foreground=COLORS['text_primary'], fieldbackground=COLORS['bg_card'], font=("Consolas", 9), rowheight=24)
+        style.configure('Dark.Treeview.Heading', background=COLORS['bg_input'], foreground=COLORS['text_primary'], font=("Consolas", 9, "bold"))
+        style.map('Dark.Treeview', background=[('selected', COLORS['accent_rr'] + '44')])
 
-        style.configure('Clear.TButton',
-                        background=COLORS['bg_input'],
-                        foreground=COLORS['text_secondary'],
-                        font=("Consolas", 9),
-                        borderwidth=0)
-
-        style.configure('Dark.TRadiobutton',
-                        background=COLORS['bg_panel'],
-                        foreground=COLORS['text_primary'],
-                        font=("Consolas", 9),
-                        indicatorcolor=COLORS['accent_rr'])
-        style.map('Dark.TRadiobutton',
-                  background=[('active', COLORS['bg_card'])])
-
-        style.configure('Dark.TNotebook',
-                        background=COLORS['bg_dark'],
-                        borderwidth=0)
-        style.configure('Dark.TNotebook.Tab',
-                        background=COLORS['bg_panel'],
-                        foreground=COLORS['text_secondary'],
-                        font=("Consolas", 9),
-                        padding=[10, 5])
-        style.map('Dark.TNotebook.Tab',
-                  background=[('selected', COLORS['bg_card'])],
-                  foreground=[('selected', COLORS['text_primary'])])
-
-        style.configure('Dark.TScale',
-                        background=COLORS['bg_panel'],
-                        troughcolor=COLORS['bg_input'],
-                        sliderthickness=14)
-
-        style.configure('Dark.TLabelframe',
-                        background=COLORS['bg_panel'],
-                        foreground=COLORS['text_secondary'],
-                        font=("Consolas", 8),
-                        borderwidth=1,
-                        relief='solid')
-        style.configure('Dark.TLabelframe.Label',
-                        background=COLORS['bg_panel'],
-                        foreground=COLORS['accent_rr'])
-
-        style.configure('Dark.Treeview',
-                        background=COLORS['bg_card'],
-                        foreground=COLORS['text_primary'],
-                        fieldbackground=COLORS['bg_card'],
-                        font=("Consolas", 9),
-                        rowheight=24)
-        style.configure('Dark.Treeview.Heading',
-                        background=COLORS['bg_input'],
-                        foreground=COLORS['text_primary'],
-                        font=("Consolas", 9, "bold"))
-        style.map('Dark.Treeview',
-                  background=[('selected', COLORS['accent_rr'] + '44')])
-
-        style.configure('Dark.TSpinbox',
-                        background=COLORS['bg_input'],
-                        foreground=COLORS['text_primary'],
-                        font=("Consolas", 9))
+        # Labelframe
+        style.configure('Dark.TLabelframe', background=COLORS['bg_panel'], foreground=COLORS['text_secondary'], font=("Consolas", 8), borderwidth=1, relief='solid')
+        style.configure('Dark.TLabelframe.Label', background=COLORS['bg_panel'], foreground=COLORS['accent_rr'])
 
     def _initialize_models(self):
         """Inisialisasi 2 model komunikasi dengan real-world scenarios"""
-        # --- Request-Response: ATM Scenario ---
-        rr = RequestResponseModel("Request-Response")
-        rr.add_node(Node("Bank-Server", "server"))
-        rr.add_node(Node("ATM-Terminal-1", "client"))
-        rr.add_node(Node("ATM-Terminal-2", "client"))
-        self.models['rr'] = rr
-
-        # --- Publish-Subscribe: Smart Home Scenario ---
-        ps = PublishSubscribeModel("Publish-Subscribe")
-        ps.add_node(Node("Temperature-Sensor", "publisher"))
-        ps.add_node(Node("AC-Unit", "subscriber"))
-        ps.add_node(Node("Fan", "subscriber"))
-        ps.add_node(Node("Mobile-App", "subscriber"))
-        ps.subscribe("AC-Unit", "temperature_alert")
-        ps.subscribe("Fan", "temperature_alert")
-        ps.subscribe("Mobile-App", "sensor_status")
-        self.models['ps'] = ps
+        models_config = {
+            'rr': {
+                'class': RequestResponseModel,
+                'name': 'Request-Response',
+                'nodes': [('Bank-Server', 'server'), ('ATM-Terminal-1', 'client'), ('ATM-Terminal-2', 'client')]
+            },
+            'ps': {
+                'class': PublishSubscribeModel,
+                'name': 'Publish-Subscribe',
+                'nodes': [('Temperature-Sensor', 'publisher'), ('AC-Unit', 'subscriber'), ('Fan', 'subscriber'), ('Mobile-App', 'subscriber')],
+                'subscriptions': [('AC-Unit', 'temperature_alert'), ('Fan', 'temperature_alert'), ('Mobile-App', 'sensor_status')]
+            }
+        }
+        for key, cfg in models_config.items():
+            model = cfg['class'](cfg['name'])
+            for node_id, node_type in cfg['nodes']:
+                model.add_node(Node(node_id, node_type))
+            if 'subscriptions' in cfg:
+                for node_id, topic in cfg['subscriptions']:
+                    model.subscribe(node_id, topic)
+            self.models[key] = model
 
 
     # Build UI
@@ -669,26 +442,12 @@ class DistributedSystemSimulatorGUI:
         self._build_body()
 
     def _build_header(self):
-        header = tk.Frame(self.root, bg=COLORS['bg_panel'],
-                          highlightbackground=COLORS['border'],
-                          highlightthickness=1)
+        header = tk.Frame(self.root, bg=COLORS['bg_panel'], highlightbackground=COLORS['border'], highlightthickness=1)
         header.pack(fill=tk.X, padx=0, pady=0)
-
-        tk.Label(header,
-                 text="◈  SIMULASI MODEL KOMUNIKASI SISTEM TERDISTRIBUSI  ◈",
-                 bg=COLORS['bg_panel'], fg=COLORS['accent_rr'],
-                 font=("Helvetica", 12, "bold")).pack(side=tk.LEFT, padx=20, pady=10)
-
-        # Badge model warna
-        for key, label, color in [
-            ('rr',  'Request-Response', COLORS['accent_rr']),
-            ('ps',  'Pub-Subscribe',    COLORS['accent_ps']),
-            ('mp',  'Msg Passing',      COLORS['accent_mp']),
-            ('rpc', 'RPC',              COLORS['accent_rpc']),
-        ]:
-            tk.Label(header, text=f"● {label}",
-                     bg=COLORS['bg_panel'], fg=color,
-                     font=("Helvetica", 8)).pack(side=tk.LEFT, padx=8, pady=10)
+        tk.Label(header, text="◈  SIMULASI MODEL KOMUNIKASI SISTEM TERDISTRIBUSI  ◈",
+                bg=COLORS['bg_panel'], fg=COLORS['accent_rr'], font=("Helvetica", 12, "bold")).pack(side=tk.LEFT, padx=20, pady=10)
+        for key, label, color in [('rr', 'Request-Response', COLORS['accent_rr']), ('ps', 'Pub-Subscribe', COLORS['accent_ps'])]:
+            tk.Label(header, text=f"● {label}", bg=COLORS['bg_panel'], fg=color, font=("Helvetica", 8)).pack(side=tk.LEFT, padx=8, pady=10)
 
     def _build_body(self):
         body = tk.Frame(self.root, bg=COLORS['bg_dark'])
@@ -701,109 +460,52 @@ class DistributedSystemSimulatorGUI:
         self._build_right_panel(body)
 
     def _build_left_panel(self, parent):
-        left = tk.Frame(parent, bg=COLORS['bg_panel'],
-                        highlightbackground=COLORS['border'],
+        left = tk.Frame(parent, bg=COLORS['bg_panel'], highlightbackground=COLORS['border'],
                         highlightthickness=1, width=210)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
         left.pack_propagate(False)
 
-        def section(text):
-            tk.Label(left, text=text,
-                     bg=COLORS['bg_panel'], fg=COLORS['accent_rr'],
-                     font=("Helvetica", 8, "bold")).pack(anchor=tk.W, padx=12, pady=(12, 4))
-            tk.Frame(left, bg=COLORS['border'], height=1).pack(fill=tk.X, padx=12)
-
         # --- Model selection ---
-        section("▸ MODEL KOMUNIKASI")
+        self._mk_section(left, "▸ MODEL KOMUNIKASI")
         self.model_var = tk.StringVar(value="rr")
-        for key, label, color in [
-            ('rr',  '⬡ Request-Response',      COLORS['accent_rr']),
-            ('ps',  '⬡ Publish-Subscribe',      COLORS['accent_ps']),
-        ]:
-            rb = tk.Radiobutton(
-                left, text=label, variable=self.model_var, value=key,
-                command=self._on_model_changed,
-                bg=COLORS['bg_panel'], fg=color,
-                selectcolor=COLORS['bg_card'],
-                activebackground=COLORS['bg_card'],
-                activeforeground=color,
-                font=("Helvetica", 8),
-                indicatoron=True, bd=0, pady=2
-            )
-            rb.pack(anchor=tk.W, padx=16, pady=2)
+        for key, label, color in [('rr', '⬡ Request-Response', COLORS['accent_rr']),
+                                   ('ps', '⬡ Publish-Subscribe', COLORS['accent_ps'])]:
+            tk.Radiobutton(left, text=label, variable=self.model_var, value=key,
+                          command=self._on_model_changed, bg=COLORS['bg_panel'], fg=color,
+                          selectcolor=COLORS['bg_card'], activebackground=COLORS['bg_card'],
+                          activeforeground=color, font=("Helvetica", 8),
+                          indicatoron=True, bd=0, pady=2).pack(anchor=tk.W, padx=16, pady=2)
 
         # --- Kontrol simulasi ---
-        section("▸ KONTROL SIMULASI")
-
-        tk.Label(left, text="Kecepatan (msg/sec):",
-                 bg=COLORS['bg_panel'], fg=COLORS['text_secondary'],
-                 font=("Helvetica", 8)).pack(anchor=tk.W, padx=12, pady=(8, 0))
+        self._mk_section(left, "▸ KONTROL SIMULASI")
+        self._mk_label(left, "Kecepatan (msg/sec):", font=("Helvetica", 8)).pack(anchor=tk.W, padx=12, pady=(8, 0))
         self.speed_var = tk.IntVar(value=5)
-        speed_scale = tk.Scale(left, from_=1, to=20,
-                               orient=tk.HORIZONTAL,
-                               variable=self.speed_var,
-                               bg=COLORS['bg_panel'], fg=COLORS['text_primary'],
-                               highlightbackground=COLORS['bg_panel'],
-                               troughcolor=COLORS['bg_input'],
-                               activebackground=COLORS['accent_rr'],
-                               font=("Helvetica", 7))
-        speed_scale.pack(fill=tk.X, padx=12)
+        tk.Scale(left, from_=1, to=20, orient=tk.HORIZONTAL, variable=self.speed_var,
+                bg=COLORS['bg_panel'], fg=COLORS['text_primary'], highlightbackground=COLORS['bg_panel'],
+                troughcolor=COLORS['bg_input'], activebackground=COLORS['accent_rr'],
+                font=("Helvetica", 7)).pack(fill=tk.X, padx=12)
 
-        tk.Label(left, text="Jumlah Pesan:",
-                 bg=COLORS['bg_panel'], fg=COLORS['text_secondary'],
-                 font=("Helvetica", 8)).pack(anchor=tk.W, padx=12, pady=(8, 2))
+        self._mk_label(left, "Jumlah Pesan:", font=("Helvetica", 8)).pack(anchor=tk.W, padx=12, pady=(8, 2))
         self.msg_count_var = tk.StringVar(value="8")
-        count_spin = tk.Spinbox(
-            left, from_=1, to=50, textvariable=self.msg_count_var,
-            bg=COLORS['bg_input'], fg=COLORS['text_primary'],
-            insertbackground=COLORS['text_primary'],
-            highlightbackground=COLORS['border'],
-            font=("Helvetica", 9), width=8, bd=0
-        )
-        count_spin.pack(padx=12, pady=(0, 8))
+        tk.Spinbox(left, from_=1, to=50, textvariable=self.msg_count_var,
+                  bg=COLORS['bg_input'], fg=COLORS['text_primary'], insertbackground=COLORS['text_primary'],
+                  highlightbackground=COLORS['border'], font=("Helvetica", 9), width=8, bd=0).pack(padx=12, pady=(0, 8))
 
-        # Buttons
-        self.run_btn = tk.Button(
-            left, text="▶  JALANKAN SIMULASI",
-            command=self._run_simulation,
-            bg=COLORS['accent_rr'], fg='white',
-            font=("Helvetica", 9, "bold"),
-            relief=tk.FLAT, bd=0, padx=10, pady=7,
-            activebackground='#79c0ff', cursor='hand2'
-        )
+        self.run_btn = self._mk_btn(left, "▶  JALANKAN SIMULASI", self._run_simulation, 'run')
         self.run_btn.pack(fill=tk.X, padx=12, pady=(4, 4))
+        self._mk_btn(left, "⬛  BERSIHKAN LOG", self._clear_logs).pack(fill=tk.X, padx=12, pady=2)
+        self._mk_btn(left, "⟳  RESET METRIK", self._reset_metrics).pack(fill=tk.X, padx=12, pady=2)
 
-        tk.Button(
-            left, text="⬛  BERSIHKAN LOG",
-            command=self._clear_logs,
-            bg=COLORS['bg_input'], fg=COLORS['text_secondary'],
-            font=("Helvetica", 8), relief=tk.FLAT, bd=0, padx=10, pady=6,
-            activebackground=COLORS['bg_card'], cursor='hand2'
-        ).pack(fill=tk.X, padx=12, pady=2)
-
-        tk.Button(
-            left, text="⟳  RESET METRIK",
-            command=self._reset_metrics,
-            bg=COLORS['bg_input'], fg=COLORS['text_secondary'],
-            font=("Helvetica", 8), relief=tk.FLAT, bd=0, padx=10, pady=6,
-            activebackground=COLORS['bg_card'], cursor='hand2'
-        ).pack(fill=tk.X, padx=12, pady=2)
-
-        # --- Status ---
-        section("▸ STATUS")
+        # --- Status & Info ---
+        self._mk_section(left, "▸ STATUS")
         self.status_var = tk.StringVar(value="● Idle — siap menjalankan simulasi")
-        tk.Label(left, textvariable=self.status_var,
-                 bg=COLORS['bg_panel'], fg=COLORS['text_secondary'],
-                 font=("Helvetica", 7), wraplength=180,
-                 justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=6)
+        self._mk_label(left, textvariable=self.status_var, font=("Helvetica", 7), wraplength=180,
+                      justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=6)
 
-        # --- Info model ---
-        section("▸ KETERANGAN")
+        self._mk_section(left, "▸ KETERANGAN")
         self.info_var = tk.StringVar(value="")
-        tk.Label(left, textvariable=self.info_var,
-                 bg=COLORS['bg_panel'], fg=COLORS['text_muted'],
-                 font=("Helvetica", 7), wraplength=180,
-                 justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=4)
+        self._mk_label(left, textvariable=self.info_var, fg=COLORS['text_muted'], font=("Helvetica", 7),
+                      wraplength=180, justify=tk.LEFT).pack(anchor=tk.W, padx=12, pady=4)
         self._update_model_info()
 
     def _build_right_panel(self, parent):
@@ -1013,7 +715,7 @@ class DistributedSystemSimulatorGUI:
         self.chart_total.pack(side=tk.LEFT, pady=4, fill=tk.BOTH, expand=True)
 
         # Analisis teks otomatis
-        tk.Label(p, text="ANALISIS OTOMATIS",
+        tk.Label(p, text="ANALISIS",
                  bg=COLORS['bg_dark'], fg=COLORS['text_muted'],
                  font=("Helvetica", 8, "bold")).pack(anchor=tk.W, padx=12, pady=(8, 2))
 
@@ -1027,6 +729,24 @@ class DistributedSystemSimulatorGUI:
             self.analysis_text.tag_config(key, foreground=color)
 
     # Logika simulasi
+    def _format_metric(self, value, is_count=False):
+        """Helper: format metric value"""
+        if isinstance(value, float):
+            return f"{value:.2f}" if not is_count else f"{value:.0f}"
+        return str(value) if value is not None else "—"
+
+    def _get_metric_values(self, model):
+        """Helper: ekstrak semua metric dari model"""
+        m = model.metrics
+        return {
+            "total": m.total_messages,
+            "latency": m.avg_latency if m.total_messages > 0 else None,
+            "min_lat": m.min_latency if m.min_latency < float('inf') else None,
+            "max_lat": m.max_latency if m.total_messages > 0 else None,
+            "throughput": m.throughput if m.total_messages > 0 else None,
+            "success": (m.success_count / max(m.total_messages, 1) * 100) if m.total_messages > 0 else None,
+        }
+
     def _attach_callbacks(self):
         """Hubungkan callback animasi dari model ke diagram"""
         def make_cb(model_key):
@@ -1034,12 +754,8 @@ class DistributedSystemSimulatorGUI:
                 diagram = self.diagrams.get(model_key)
                 if diagram:
                     short = str(content)[:12]
-                    self.root.after(0, lambda: diagram.animate_message(
-                        from_id, to_id, label=short,
-                        color=MODEL_COLORS[model_key]
-                    ))
+                    self.root.after(0, lambda: diagram.animate_message(from_id, to_id, label=short, color=MODEL_COLORS[model_key]))
             return cb
-
         self.models['rr'].event_callback  = make_cb('rr')
         self.models['ps'].event_callback  = make_cb('ps')
 
@@ -1111,9 +827,8 @@ class DistributedSystemSimulatorGUI:
         ))
 
     def _sim_rr(self, model, msg_count, delay):
-        atm_terminals = ["ATM-Terminal-1", "ATM-Terminal-2"]
         for i in range(msg_count):
-            atm = atm_terminals[i % 2]
+            atm = ["ATM-Terminal-1", "ATM-Terminal-2"][i % 2]
             req = f"Withdrawal: Rp {(i+1)*100000:,}"
             resp = model.send_request(atm, "Bank-Server", req)
             self._log(f"  [RR] {atm} → Bank-Server : {req}", 'rr')
@@ -1121,8 +836,7 @@ class DistributedSystemSimulatorGUI:
             time.sleep(delay)
 
     def _sim_ps(self, model, msg_count, delay):
-        half = max(msg_count // 2, 1)
-        for i in range(half):
+        for i in range(max(msg_count // 2, 1)):
             temp = 28 + (i % 5)
             model.publish("Temperature-Sensor", "temperature_alert", f"Temp: {temp}°C")
             self._log(f"  [PS] Sensor → topic:temperature_alert : {temp}°C", 'ps')
@@ -1134,43 +848,34 @@ class DistributedSystemSimulatorGUI:
     # Perbandingan
     def _refresh_comparison(self):
         """Isi tabel perbandingan dan perbarui grafik"""
-        # Kosongkan tabel
         for row in self.compare_tree.get_children():
             self.compare_tree.delete(row)
 
-        model_info = {
-            'rr':  ("Request-Response", "Ya"),
-            'ps':  ("Publish-Subscribe", "Tidak"),
-        }
-
+        model_info = {'rr': ("Request-Response", "Ya"), 'ps': ("Publish-Subscribe", "Tidak")}
         lat_data = {}
         thr_data = {}
         tot_data = {}
 
         for key, (name, sinkron) in model_info.items():
-            m = self.models[key].metrics
-            total     = m.total_messages
-            avg_lat   = f"{m.avg_latency:.2f}" if total > 0 else "—"
-            min_lat   = f"{m.min_latency:.2f}" if m.min_latency < float('inf') else "—"
-            max_lat   = f"{m.max_latency:.2f}" if total > 0 else "—"
-            thr       = f"{m.throughput:.2f}" if total > 0 else "—"
-            success   = f"{(m.success_count/(total or 1))*100:.1f}" if total > 0 else "—"
+            vals = self._get_metric_values(self.models[key])
+            total = vals["total"]
+            avg_lat = f"{vals['latency']:.2f}" if vals['latency'] else "—"
+            min_lat = f"{vals['min_lat']:.2f}" if vals['min_lat'] else "—"
+            max_lat = f"{vals['max_lat']:.2f}" if vals['max_lat'] else "—"
+            thr = f"{vals['throughput']:.2f}" if vals['throughput'] else "—"
+            success = f"{vals['success']:.1f}" if vals['success'] else "—"
 
-            self.compare_tree.insert('', tk.END, values=(
-                name, total, avg_lat, min_lat, max_lat, thr, success, sinkron
-            ), tags=(key,))
-
+            self.compare_tree.insert('', tk.END, values=(name, total, avg_lat, min_lat, max_lat, thr, success, sinkron), tags=(key,))
             self.compare_tree.tag_configure(key, foreground=MODEL_COLORS[key])
 
             if total > 0:
-                lat_data[key] = m.avg_latency
-                thr_data[key] = m.throughput
+                lat_data[key] = vals['latency']
+                thr_data[key] = vals['throughput']
                 tot_data[key] = float(total)
 
         self.chart_latency.update_data(lat_data)
         self.chart_throughput.update_data(thr_data)
         self.chart_total.update_data(tot_data)
-
         self._generate_analysis(lat_data, thr_data, tot_data)
 
     def _generate_analysis(self, lat: dict, thr: dict, tot: dict):
@@ -1178,54 +883,29 @@ class DistributedSystemSimulatorGUI:
         txt = self.analysis_text
         txt.configure(state=tk.NORMAL)
         txt.delete("1.0", tk.END)
-
         if not lat:
-            txt.insert(tk.END,
-                       "Belum ada data. Jalankan simulasi pada setiap model terlebih dahulu, "
-                       "lalu klik 'Perbarui Perbandingan'.")
+            txt.insert(tk.END, "Belum ada data. Jalankan simulasi pada setiap model terlebih dahulu.")
             txt.configure(state=tk.DISABLED)
             return
-
-        fastest = min(lat, key=lat.get)
-        slowest = max(lat, key=lat.get)
-        highest_thr = max(thr, key=thr.get) if thr else None
-
-        names = {
-            'rr':'Request-Response','ps':'Pub-Subscribe',
-            'mp':'Message Passing','rpc':'RPC'
-        }
-
-        txt.insert(tk.END, f"• Model dengan latency TERENDAH: ", "info")
+        fastest, slowest = min(lat, key=lat.get), max(lat, key=lat.get)
+        names = {'rr': 'Request-Response', 'ps': 'Pub-Subscribe'}
+        txt.insert(tk.END, f"• Latency TERENDAH: ", "info")
         txt.insert(tk.END, f"{names[fastest]} ({lat[fastest]:.2f} ms)\n", fastest)
-
-        txt.insert(tk.END, f"• Model dengan latency TERTINGGI: ", "info")
+        txt.insert(tk.END, f"• Latency TERTINGGI: ", "info")
         txt.insert(tk.END, f"{names[slowest]} ({lat[slowest]:.2f} ms)\n", slowest)
-
-        if highest_thr:
+        if thr:
+            highest = max(thr, key=thr.get)
             txt.insert(tk.END, f"• Throughput TERTINGGI: ", "info")
-            txt.insert(tk.END, f"{names[highest_thr]} ({thr[highest_thr]:.2f} msg/s)\n", highest_thr)
-
-        sinkron = [k for k in lat if k in ('rr', 'rpc')]
-        asinkron = [k for k in lat if k in ('ps', 'mp')]
-        if sinkron and asinkron:
-            avg_s = sum(lat[k] for k in sinkron) / len(sinkron)
-            avg_a = sum(lat[k] for k in asinkron) / len(asinkron)
-            winner = "SINKRON" if avg_s < avg_a else "ASINKRON"
-            txt.insert(tk.END,
-                       f"• Avg latency Sinkron: {avg_s:.2f} ms vs Asinkron: {avg_a:.2f} ms "
-                       f"→ model {winner} lebih cepat dalam simulasi ini.\n", "info")
-
+            txt.insert(tk.END, f"{names[highest]} ({thr[highest]:.2f} msg/s)\n", highest)
         txt.configure(state=tk.DISABLED)
 
     # Utilitas
     def _log(self, message: str, tag: str = "info"):
         """Tulis ke log dengan timestamp"""
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        line = f"[{ts}] {message}\n"
-
         def insert():
             self.log_text.configure(state=tk.NORMAL)
-            self.log_text.insert(tk.END, line, tag)
+            self.log_text.insert(tk.END, f"[{ts}] {message}\n", tag)
             self.log_text.see(tk.END)
             self.log_text.configure(state=tk.DISABLED)
         self.root.after(0, insert)
@@ -1234,23 +914,18 @@ class DistributedSystemSimulatorGUI:
         self.log_text.configure(state=tk.NORMAL)
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
-        self._log("Log dibersihkan.", "info")
 
     def _reset_metrics(self):
-        for model in self.models.values():
-            model.metrics.reset()
+        [m.metrics.reset() for m in self.models.values()]
         self._log("Semua metrik direset.", "warn")
-        self._update_metrics_display()
 
     def _start_metric_updater(self):
-        """Perbarui tampilan metrik setiap 500ms"""
         def loop():
             while self.running:
                 try:
                     self.root.after(0, self._update_metrics_display)
                     time.sleep(0.5)
-                except Exception:
-                    pass  # Silent fail if root is destroyed
+                except: pass
         threading.Thread(target=loop, daemon=True).start()
 
     def _on_closing(self):
@@ -1268,18 +943,20 @@ class DistributedSystemSimulatorGUI:
     def _update_metrics_display(self):
         """Perbarui kartu metrik sesuai model aktif"""
         key = self.model_var.get()
-        m = self.models[key].metrics
+        model = self.models[key]
+        m = model.metrics
         color = MODEL_COLORS[key]
 
-        vals = {
-            "total":      str(m.total_messages),
-            "latency":    f"{m.avg_latency:.2f}" if m.total_messages > 0 else "—",
-            "min_lat":    f"{m.min_latency:.2f}" if m.min_latency < float('inf') else "—",
-            "max_lat":    f"{m.max_latency:.2f}" if m.total_messages > 0 else "—",
-            "throughput": f"{m.throughput:.2f}" if m.total_messages > 0 else "—",
-            "success":    f"{(m.success_count/max(m.total_messages,1))*100:.1f}" if m.total_messages > 0 else "—",
+        vals = self._get_metric_values(model)
+        display_vals = {
+            "total": self._format_metric(vals["total"], is_count=True),
+            "latency": self._format_metric(vals["latency"]) if vals["latency"] else "—",
+            "min_lat": self._format_metric(vals["min_lat"]) if vals["min_lat"] else "—",
+            "max_lat": self._format_metric(vals["max_lat"]) if vals["max_lat"] else "—",
+            "throughput": self._format_metric(vals["throughput"]) if vals["throughput"] else "—",
+            "success": self._format_metric(vals["success"]) if vals["success"] else "—",
         }
-        for k, v in vals.items():
+        for k, v in display_vals.items():
             self.metric_cards[k].configure(text=v, fg=color)
 
 
